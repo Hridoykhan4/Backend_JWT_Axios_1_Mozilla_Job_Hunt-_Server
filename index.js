@@ -6,16 +6,26 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 5000;
-
+console.log("ENV:", process.env.NODE_ENV);
 // Middleware
 app.use(
   cors({
-    origin: [`http://localhost:5173`],
-    credentials: true, //Enable cookies from React client
+    origin: [
+      `https://mozilla-job-hunter.web.app`,
+      `https://mozilla-job-hunter.firebaseapp.com`,
+      `http://localhost:5173`,
+    ],
+    credentials: true,
   })
 );
 app.use(express.json());
 app.use(cookieParser());
+
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+};
 
 const verifyToken = (req, res, next) => {
   const token = req?.cookies?.token;
@@ -27,9 +37,8 @@ const verifyToken = (req, res, next) => {
     if (err) {
       return res.status(401).send({ message: "Unauthorized Access" });
     }
-    //
+
     req.user = decoded;
-    console.log(req.user);
     next();
   });
 };
@@ -60,20 +69,12 @@ async function run() {
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
         expiresIn: "5d",
       });
-      res
-        .cookie("token", token, {
-          secure: false,
-          httpOnly: true,
-        })
-        .send({ success: true });
+      res.cookie("token", token, cookieOptions).send({ success: true });
     });
 
     app.post("/logout", (req, res) => {
       res
-        .clearCookie("token", {
-          httpOnly: true,
-          secure: false,
-        })
+        .clearCookie("token", { ...cookieOptions, maxAge: 0 })
         .send({ success: true });
     });
 
@@ -81,20 +82,29 @@ async function run() {
     // Get all jobs
     app.get("/jobs", async (req, res) => {
       const { fromFeatured, email, allJobs } = req.query;
-      let result;
-      if (fromFeatured === "featureTrue") {
-        result = await jobCollection.find().limit(4).toArray();
-        return res.send(result);
-      }
 
-      if (email) {
-        result = await jobCollection.find({ hr_email: email }).toArray();
-        return res.send(result);
-      }
+      try {
+        let result;
 
-      if (allJobs === "all") {
-        result = await jobCollection.find().toArray();
-        return res.send(result);
+        if (fromFeatured === "featureTrue") {
+          result = await jobCollection.find().limit(4).toArray();
+          return res.send(result);
+        }
+
+        if (email) {
+          result = await jobCollection.find({ hr_email: email }).toArray();
+          return res.send(result);
+        }
+
+        if (allJobs === "all") {
+          result = await jobCollection.find().toArray();
+          return res.send(result);
+        }
+
+        return res.status(400).send({ message: "Invalid query parameters" });
+      } catch (error) {
+        console.error("Error in /jobs route:", error);
+        return res.status(500).send({ message: "Internal Server Error" });
       }
     });
 
@@ -116,7 +126,6 @@ async function run() {
 
     // Patch a job application
     app.patch("/job-applications/:id", async (req, res) => {
-      console.log(req.body);
       const status = req.body;
       const result = await jobApplicationCollection.updateOne(
         { _id: new ObjectId(req.params.id) },
@@ -224,9 +233,9 @@ async function run() {
       res.send(result);
     });
 
-    console.log(
+    /* console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    ); */
   } finally {
   }
 }
