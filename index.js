@@ -6,7 +6,6 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const cors = require("cors");
 const app = express();
 const port = process.env.PORT || 5000;
-console.log("ENV:", process.env.NODE_ENV);
 // Middleware
 app.use(
   cors({
@@ -80,32 +79,45 @@ async function run() {
 
     // Job related APIS
     // Get all jobs
-    app.get("/jobs", async (req, res) => {
-      const { fromFeatured, email, allJobs } = req.query;
-
-      try {
-        let result;
-
-        if (fromFeatured === "featureTrue") {
-          result = await jobCollection.find().limit(4).toArray();
-          return res.send(result);
+    app.get("/jobs", verifyToken, async (req, res) => {
+      const { fromFeatured, email, sort, search, minSalary, maxSalary } = req?.query;
+      let query = {}
+      let sortQuery = {}
+      if (email) {
+        if (req?.user?.email !== email) {
+          return res.status(403).send({ message: "Forbidden Access" })
         }
-
-        if (email) {
-          result = await jobCollection.find({ hr_email: email }).toArray();
-          return res.send(result);
-        }
-
-        if (allJobs === "all") {
-          result = await jobCollection.find().toArray();
-          return res.send(result);
-        }
-
-        return res.status(400).send({ message: "Invalid query parameters" });
-      } catch (error) {
-        console.error("Error in /jobs route:", error);
-        return res.status(500).send({ message: "Internal Server Error" });
+        query.hr_email = email
       }
+
+      if (search) {
+        query.title = { $regex: search, $options: "i" }
+      }
+
+      if (minSalary || maxSalary) {
+        query["salaryRange.min"] = {};
+        query["salaryRange.max"] = {};
+
+        if (minSalary) query["salaryRange.min"].$gte = parseInt(minSalary);
+        if (maxSalary) query["salaryRange.max"].$lte = parseInt(maxSalary);
+      }
+
+
+
+      let cursor = jobCollection.find(query, sortQuery);
+
+      if (sort === "true") {
+        sortQuery = cursor.sort({ 'salaryRange.min': -1 })
+      }
+
+
+      if (fromFeatured === 'featureTrue') {
+        cursor = cursor.limit(4);
+      }
+      const result = await cursor.toArray();
+      res.send(result)
+
+
     });
 
     // Get a specific job
@@ -233,9 +245,7 @@ async function run() {
       res.send(result);
     });
 
-    /* console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    ); */
+
   } finally {
   }
 }
