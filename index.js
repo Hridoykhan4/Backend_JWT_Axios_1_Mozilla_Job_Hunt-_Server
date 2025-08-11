@@ -82,7 +82,6 @@ async function run() {
     app.get("/jobs", verifyToken, async (req, res) => {
       const { fromFeatured, email, sort, search, minSalary, maxSalary } = req?.query;
       let query = {}
-      let sortQuery = {}
       if (email) {
         if (req?.user?.email !== email) {
           return res.status(403).send({ message: "Forbidden Access" })
@@ -94,27 +93,32 @@ async function run() {
         query.title = { $regex: search, $options: "i" }
       }
 
+
       if (minSalary || maxSalary) {
-        query["salaryRange.min"] = {};
-        query["salaryRange.max"] = {};
+        if (minSalary) {
+          query["salaryRange.min"] = { $gte: parseInt(minSalary) }
+        }
+        if (maxSalary) {
 
-        if (minSalary) query["salaryRange.min"].$gte = parseInt(minSalary);
-        if (maxSalary) query["salaryRange.max"].$lte = parseInt(maxSalary);
+          query["salaryRange.max"] = { $lte: parseInt(minSalary) }
+        }
       }
 
 
-
-      let cursor = jobCollection.find(query, sortQuery);
-
-      if (sort === "true") {
-        sortQuery = cursor.sort({ 'salaryRange.min': -1 })
-      }
-
+      let cursor = jobCollection.find(query);
 
       if (fromFeatured === 'featureTrue') {
         cursor = cursor.limit(4);
       }
+
+      if (sort === "true") {
+        cursor = cursor.sort({ 'salaryRange.min': -1 })
+      }
+
       const result = await cursor.toArray();
+
+
+
       res.send(result)
 
 
