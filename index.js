@@ -1,5 +1,5 @@
-const express = require("express");
 require("dotenv").config();
+const express = require("express");
 const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -19,11 +19,34 @@ app.use(
 );
 app.use(express.json());
 app.use(cookieParser());
+var admin = require("firebase-admin");
+
+var serviceAccount = require("./firebase-admin-key.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 
 const cookieOptions = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+};
+
+/* const tokenVerify = (token) => {
+  try {
+    return jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+  } catch (err) {
+    return null;
+  }
+};
+ */
+const verifyFirebaseToken = async (req, res, next) => {
+  const token = req?.headers?.authorization.split(" ")[1];
+  if (!token) return res.status(401).send({ message: "Unauthorized access" });
+  const userInfo = await admin.auth().verifyIdToken(token);
+  req.tokenEmail = userInfo?.email;
+  next();
 };
 
 const verifyToken = (req, res, next) => {
@@ -78,50 +101,62 @@ async function run() {
     });
 
     // Job related APIS
-    // Get all jobs
-    app.get("/jobs", verifyToken, async (req, res) => {
-      const { fromFeatured, email, sort, search, minSalary, maxSalary } = req?.query;
-      let query = {}
-      if (email) {
-        if (req?.user?.email !== email) {
-          return res.status(403).send({ message: "Forbidden Access" })
-        }
-        query.hr_email = email
-      }
+    app.get("/jobs", async (req, res) => {
+      const { fromFeatured, sort, search, minSalary, maxSalary } = req?.query;
+      let query = {};
 
       if (search) {
-        query.title = { $regex: search, $options: "i" }
+        query.title = { $regex: search, $options: "i" };
       }
 
-
+      /*  if (email) {
+        const decoded = tokenVerify(req.cookies?.token);
+        if (decoded?.email !== email) {
+          res.status(403).send({ message: "Forbidden Access" });
+        }
+        query.hr_email = email;
+      }
+ */
       if (minSalary || maxSalary) {
         if (minSalary) {
-          query["salaryRange.min"] = { $gte: parseInt(minSalary) }
+          query["salaryRange.min"] = { $gte: parseInt(minSalary) };
         }
         if (maxSalary) {
-
-          query["salaryRange.max"] = { $lte: parseInt(minSalary) }
+          query["salaryRange.max"] = { $lte: parseInt(maxSalary) };
         }
       }
-
 
       let cursor = jobCollection.find(query);
 
-      if (fromFeatured === 'featureTrue') {
+      if (fromFeatured === "featureTrue") {
         cursor = cursor.limit(4);
       }
 
       if (sort === "true") {
-        cursor = cursor.sort({ 'salaryRange.min': -1 })
+        cursor = cursor.sort({ "salaryRange.min": -1 });
       }
 
       const result = await cursor.toArray();
 
+      res.send(result);
+    });
 
+    app.get("/jobs/applicationsCount", verifyToken, async (req, res) => {
+      const jobs = await jobCollection
+        .find({ hr_email: req.query.email })
+        .toArray();
+      for (const job of jobs) {
+        const totalCount = await jobApplicationCollection.countDocuments({
+          job_id: job._id.toString(),
+        });
+        // job.totalCount = totalCount;
+        await jobCollection.updateOne(
+          { _id: new ObjectId(job._id) },
+          { $set: { totalCount } }
+        );
+      }
 
-      res.send(result)
-
-
+      res.send(jobs);
     });
 
     // Get a specific job
@@ -132,7 +167,7 @@ async function run() {
       res.send(result);
     });
 
-    // Get all applied jobs by all applicants
+    // Get all applied jobs by all applicants for a single job
     app.get("/job-applications/jobs/:job_id", async (req, res) => {
       const result = await jobApplicationCollection
         .find({ job_id: req.params.job_id })
@@ -152,16 +187,19 @@ async function run() {
     });
 
     // Get jobs based on email
-    app.get("/appliedData", verifyToken, async (req, res) => {
+    app.get("/appliedData", verifyFirebaseToken, async (req, res) => {
       const email = req.query.email;
       const query = { email };
-
-      if (req.user.email !== email) {
+      console.log(req?.tokenEmail, email);  
+      if (req?.tokenEmail!== email)
         return res.status(403).send({ message: "Forbidden Access" });
-      }
 
+      // console.log(email);
+      // Will Uncomment soon
+      // if (req.user.email !== email) {
+      //   return res.status(403).send({ message: "Forbidden Access" });
+      // }
       const result = await jobApplicationCollection.find(query).toArray();
-
       for (const application of result) {
         const jobMatchedInfo = await jobCollection.findOne({
           _id: new ObjectId(application.job_id),
@@ -190,6 +228,8 @@ async function run() {
 
       // Not the best way(Use aggregate)
 
+      // Jokhon apply korbo tokhon count barabo;new system e jkhn Jobs er API te hit korbo,for a jobs posted by particular email e tkhn email query diye job gula load korbo,then loop chalabo and appsCollection e (looped) job er id diye khuje countDocument diye count korbo and job er shathe job?.count diye lagai client e pathai dibo korbo;
+      /* 
       const id = application.job_id;
 
       const query = { _id: new ObjectId(id) };
@@ -203,14 +243,14 @@ async function run() {
         newCount = 1;
       }
 
-      const response = await jobCollection.updateOne(
+   await jobCollection.updateOne(
         { _id: new ObjectId(id) },
         {
           $set: {
             applicationCount: newCount,
           },
         }
-      );
+      ); */
       res.send(result);
     });
 
@@ -230,16 +270,10 @@ async function run() {
       const matchedJob = await jobCollection.findOne({
         _id: new ObjectId(jobId),
       });
-      if (matchedJob.applicationCount) {
-        const reduceCount = {
-          $set: {
-            applicationCount: matchedJob.applicationCount - 1,
-          },
-        };
-
-        const result = await jobCollection.updateOne(
+      if (matchedJob?.totalCount) {
+        await jobCollection.updateOne(
           { _id: new ObjectId(jobId) },
-          reduceCount
+          { $inc: { totalCount: -1 } }
         );
       }
 
@@ -248,8 +282,6 @@ async function run() {
       });
       res.send(result);
     });
-
-
   } finally {
   }
 }
